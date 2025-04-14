@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Slippery Coin Collector</title>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&display=swap" rel="stylesheet">
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      height: 100%;
+      background: radial-gradient(ellipse at center, #1a1a2e 0%, #16213e 100%);
+      font-family: 'Orbitron', sans-serif;
+    }
+    canvas {
+      display: block;
+      background: radial-gradient(circle, #0f0c29, #302b63, #24243e);
+    }
+    #startMenu {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      z-index: 10;
+      transition: opacity 1s ease, transform 1s ease;
+    }
+    #startMenu.hide {
+      opacity: 0;
+      transform: scale(1.2);
+      pointer-events: none;
+    }
+    #startMenu h1 {
+      font-size: 6em;
+      margin: 0 0 40px 0;
+      text-align: center;
+      text-shadow: 0 0 30px cyan;
+    }
+    #startButton {
+      font-size: 2em;
+      padding: 20px 50px;
+      background-color: cyan;
+      border: none;
+      border-radius: 20px;
+      cursor: pointer;
+      box-shadow: 0 0 25px cyan;
+      transition: transform 0.3s, background-color 0.3s, box-shadow 0.3s;
+    }
+    #startButton:hover {
+      background-color: #00e6e6;
+      transform: scale(1.1);
+      box-shadow: 0 0 35px #00ffff;
+    }
+    #scoreDisplay, #highScoreDisplay {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 2em;
+      color: white;
+      text-shadow: 0 0 10px #00ffff;
+      z-index: 5;
+    }
+    #scoreDisplay { top: 20px; }
+    #highScoreDisplay { top: 100px; }
+  </style>
+</head>
+<body>
+<div id="startMenu">
+  <h1>🪙 | COIN MAINAC | 🪙</h1>
+  <p id="highScoreDisplay">High Score: 0</p>
+  <button id="startButton">▶ Play Now</button>
+</div>
+<div id="scoreDisplay">Score: 0</div>
+<audio id="coinCollectSound" src="CoinSFX.mp3"></audio>
+<audio id="deathSound" src="https://www.soundjay.com/button/beep-07.wav"></audio>
+<audio id="powerupSound" src="https://www.soundjay.com/button/beep-09.wav"></audio>
+<audio id="bgMusic" src="BG Music.mp3" loop></audio>
+<canvas id="gameCanvas"></canvas>
+<script>
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+const scoreDisplay = document.getElementById("scoreDisplay");
+const highScoreDisplay = document.getElementById("highScoreDisplay");
+const coinCollectSound = document.getElementById("coinCollectSound");
+const deathSound = document.getElementById("deathSound");
+const powerupSound = document.getElementById("powerupSound");
+const bgMusic = document.getElementById("bgMusic");
+
+function resizeCanvas() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+let player, coin, enemies, shieldPowerup;
+let gameStarted = false;
+let score = 0;
+let highScore = 0;
+let shieldActive = false;
+let shieldUsed = false;
+let shieldTimer = 0;
+let immunityTimer = 0;
+const keys = {};
+document.addEventListener("keydown", e => keys[e.key] = true);
+document.addEventListener("keyup", e => keys[e.key] = false);
+const trail = [];
+const MAX_TRAIL_LENGTH = 15;
+
+function getRandomPosition(radius) {
+  return {
+    x: Math.random() * (canvas.width - 2 * radius) + radius,
+    y: Math.random() * (canvas.height - 2 * radius) + radius
+  };
+}
+
+function createEnemy() {
+  const speedOptions = [0.08, 0.1, 0.2, 0.3];
+  const speedWeights = [0.03, 0.27, 0.5, 0.2];
+  const aiOptions = ['super-smart', 'smart', 'dumb', 'mega-dumb'];
+  const aiWeights = [0.25, 0.5, 0.2, 0.05];
+
+  function weightedRandom(options, weights) {
+    const r = Math.random();
+    let acc = 0;
+    for (let i = 0; i < weights.length; i++) {
+      acc += weights[i];
+      if (r <= acc) return options[i];
+    }
+    return options[options.length - 1];
+  }
+
+  const speed = weightedRandom(speedOptions, speedWeights);
+  const ai = weightedRandom(aiOptions, aiWeights);
+  const pos = getRandomPosition(20);
+  return { x: pos.x, y: pos.y, radius: 20, speed, ai, friction: 0.98, vx: 0, vy: 0 };
+}
+
+function initializeGame() {
+  const pos = getRandomPosition(15);
+  player = { x: pos.x, y: pos.y, radius: 15, vx: 0, vy: 0, speed: 0.4, friction: 0.98 };
+  const coinPos = getRandomPosition(10);
+  coin = { x: coinPos.x, y: coinPos.y, radius: 10 };
+  enemies = [createEnemy()];
+  shieldPowerup = { ...getRandomPosition(12), radius: 12, active: true };
+  trail.length = 0;
+  score = 0;
+  shieldActive = false;
+  shieldUsed = false;
+  shieldTimer = 0;
+  immunityTimer = 0;
+  scoreDisplay.textContent = `Score: ${score}`;
+}
+
+function endGame() {
+  gameStarted = false;
+  deathSound.play();
+  const fadeInterval = setInterval(() => {
+    if (bgMusic.volume > 0.01) {
+      bgMusic.volume *= 0.9;
+    } else {
+      clearInterval(fadeInterval);
+      bgMusic.pause();
+      bgMusic.volume = 0.15;
+      bgMusic.currentTime = 0;
+    }
+  }, 100);
+  if (score > highScore) highScore = score;
+  highScoreDisplay.innerText = `High Score: ${highScore}`;
+  setTimeout(() => {
+    document.getElementById("startMenu").style.display = "flex";
+    document.getElementById("startMenu").classList.remove("hide");
+  }, 3000);
+}
+
+function update() {
+  if (!gameStarted) return;
+  if (keys["ArrowUp"] || keys["w"]) player.vy -= player.speed;
+  if (keys["ArrowDown"] || keys["s"]) player.vy += player.speed;
+  if (keys["ArrowLeft"] || keys["a"]) player.vx -= player.speed;
+  if (keys["ArrowRight"] || keys["d"]) player.vx += player.speed;
+  player.vx *= player.friction;
+  player.vy *= player.friction;
+  player.x += player.vx;
+  player.y += player.vy;
+  player.x = Math.max(player.radius, Math.min(canvas.width - player.radius, player.x));
+  player.y = Math.max(player.radius, Math.min(canvas.height - player.radius, player.y));
+
+  for (let enemy of enemies) {
+    const dx = player.x - enemy.x;
+    const dy = player.y - enemy.y;
+    const angle = Math.atan2(dy, dx);
+    if (enemy.ai === 'super-smart') {
+      enemy.vx += Math.cos(angle) * enemy.speed;
+      enemy.vy += Math.sin(angle) * enemy.speed;
+    } else if (enemy.ai === 'smart') {
+      enemy.vx += Math.cos(angle) * enemy.speed * 0.8;
+      enemy.vy += Math.sin(angle) * enemy.speed * 0.8;
+    } else if (enemy.ai === 'dumb') {
+      enemy.vx += (Math.random() - 0.5) * enemy.speed * 2;
+      enemy.vy += (Math.random() - 0.5) * enemy.speed * 2;
+    } else {
+      enemy.vx += (Math.random() - 0.5) * enemy.speed * 0.5;
+      enemy.vy += (Math.random() - 0.5) * enemy.speed * 0.5;
+    }
+    enemy.vx *= enemy.friction;
+    enemy.vy *= enemy.friction;
+    enemy.x += enemy.vx;
+    enemy.y += enemy.vy;
+    if (Math.hypot(enemy.x - player.x, enemy.y - player.y) < enemy.radius + player.radius) {
+      if (shieldActive && !shieldUsed) {
+        shieldUsed = true;
+        shieldActive = false;
+        immunityTimer = 120;
+      } else if (immunityTimer <= 0) {
+        endGame();
+        return;
+      }
+    }
+  }
+
+  const dx = player.x - coin.x;
+  const dy = player.y - coin.y;
+  if (Math.hypot(dx, dy) < player.radius + coin.radius) {
+    score++;
+    scoreDisplay.textContent = `Score: ${score}`;
+    const newCoin = getRandomPosition(10);
+    coin.x = newCoin.x;
+    coin.y = newCoin.y;
+    coinCollectSound.play();
+    enemies.push(createEnemy());
+  }
+
+  if (shieldPowerup.active && Math.hypot(player.x - shieldPowerup.x, player.y - shieldPowerup.y) < player.radius + shieldPowerup.radius) {
+    shieldActive = true;
+    shieldUsed = false;
+    shieldTimer = 1800;
+    shieldPowerup.active = false;
+    powerupSound.play();
+  }
+
+  if (shieldTimer > 0) {
+    shieldTimer--;
+    if (shieldTimer === 0 && !shieldUsed) {
+      shieldActive = false;
+    }
+  }
+
+  if (immunityTimer > 0) immunityTimer--;
+
+  trail.push({ x: player.x, y: player.y, radius: player.radius, alpha: 1.0 });
+  if (trail.length > MAX_TRAIL_LENGTH) trail.shift();
+  trail.forEach(p => { p.alpha -= 0.02; p.radius *= 0.95; });
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!gameStarted) return;
+  const blink = immunityTimer > 0 && Math.floor(immunityTimer / 15) % 2 === 0;
+
+  if (!blink) {
+    ctx.beginPath();
+    const grad = ctx.createRadialGradient(player.x, player.y, 5, player.x, player.y, player.radius);
+    grad.addColorStop(0, "#00ffff");
+    grad.addColorStop(1, "#004d4d");
+    ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+    ctx.fillStyle = grad;
+    ctx.shadowColor = '#00ffff';
+    ctx.shadowBlur = 20;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+
+  ctx.beginPath();
+  const coinGrad = ctx.createRadialGradient(coin.x, coin.y, 2, coin.x, coin.y, coin.radius);
+  coinGrad.addColorStop(0, "#ffff66");
+  coinGrad.addColorStop(1, "#cc9900");
+  ctx.arc(coin.x, coin.y, coin.radius, 0, Math.PI * 2);
+  ctx.fillStyle = coinGrad;
+  ctx.shadowColor = '#ffcc00';
+  ctx.shadowBlur = 15;
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  for (let enemy of enemies) {
+    ctx.beginPath();
+    ctx.arc(enemy.x, enemy.y, enemy.radius, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,0,100,0.9)";
+    ctx.shadowColor = '#ff0066';
+    ctx.shadowBlur = 25;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+
+  if (shieldPowerup.active) {
+    ctx.beginPath();
+    ctx.arc(shieldPowerup.x, shieldPowerup.y, shieldPowerup.radius, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(0, 200, 255, 0.8)";
+    ctx.shadowColor = '#00ffff';
+    ctx.shadowBlur = 20;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+
+  trail.forEach(p => {
+    if (immunityTimer > 0 && Math.floor(immunityTimer / 15) % 2 === 0) return;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(0, 255, 255, ${p.alpha})`;
+    ctx.fill();
+  });
+}
+
+function gameLoop() {
+  update();
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+gameLoop();
+
+document.getElementById("startButton").addEventListener("click", () => {
+  document.getElementById("startMenu").classList.add("hide");
+  setTimeout(() => {
+    document.getElementById("startMenu").style.display = "none";
+    gameStarted = true;
+    initializeGame();
+    bgMusic.volume = 0.15;
+    bgMusic.play();
+  }, 1000);
+});
+</script>
+</body>
+</html>
